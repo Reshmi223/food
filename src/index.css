@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/* Base theme colors as CSS variables */
+html.light {
+  --bg-primary: #F7FAF7;
+  --bg-card: #FFFFFF;
+  --bg-sidebar: #FFFFFF;
+  --text-primary: #2D3436;
+  --text-secondary: #636E72;
+  --text-muted: #95A5A6;
+  --border-color: #E2E8E4;
+  --shadow-color: rgba(23, 107, 69, 0.06);
+  --hover-bg: #F0F7F2;
+}
+
+html.dark {
+  --bg-primary: #1a2320;
+  --bg-card: #232D28;
+  --bg-sidebar: #1E2A25;
+  --text-primary: #E8F0E8;
+  --text-secondary: #A8C0A8;
+  --text-muted: #6B8A6B;
+  --border-color: #3A4A42;
+  --shadow-color: rgba(0, 0, 0, 0.3);
+  --hover-bg: #2A3A33;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.transition-theme {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
