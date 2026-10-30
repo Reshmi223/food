@@ -1,25 +1,25 @@
-import { useState, useEffect, createContext, useContext, useCallback } from 'react';
+import { useState, useEffect, createContext, useContext, useMemo } from 'react';
 import {
-  Sun, Moon, Leaf, Heart, HeartHandshake, MapPin, Clock, Phone,
-  User, Mail, Lock, Eye, EyeOff, ArrowRight, ArrowLeft,
-  CheckCircle2, XCircle, AlertTriangle, Bell, BellRing,
-  Package, Calendar, Users, Home, LogOut, Search, Filter,
-  Utensils, Truck, X, Menu, ChevronRight, Sparkles
+  Leaf, Sun, Moon, Bell, Search, Menu, X, Heart, MapPin, Clock,
+  Users, Package, AlertTriangle, CheckCircle2, XCircle, ArrowRight,
+  LogOut, Utensils, Apple, ChefHat, Filter, Phone, Mail, User as UserIcon,
+  Building2, Calendar, Weight, Info, Gift, Sparkles, ChevronRight,
+  Trash2, Eye
 } from 'lucide-react';
 
-// ==================== TYPES ====================
-type Role = 'donor' | 'acceptor' | null;
-type Page = 'login' | 'donor-dashboard' | 'acceptor-dashboard';
+// ============ TYPES ============
+type Role = 'donor' | 'acceptor';
+type AuthMode = 'login' | 'register';
+type Page = 'auth' | 'donor' | 'acceptor';
 
-interface UserAccount {
+interface User {
   id: string;
-  role: 'donor' | 'acceptor';
   name: string;
   email: string;
   phone: string;
-  address: string;
   locality: string;
-  password: string;
+  role: Role;
+  organization?: string;
 }
 
 interface FoodDonation {
@@ -27,71 +27,64 @@ interface FoodDonation {
   donorId: string;
   donorName: string;
   donorPhone: string;
-  donorAddress: string;
-  locality: string;
+  donorLocality: string;
   foodType: string;
   quantity: string;
-  servings: number;
-  preparationDate: string;
-  expiryTime: string;
-  foodCondition: 'fresh' | 'packed' | 'cooked';
-  specialNotes: string;
-  status: 'available' | 'claimed' | 'picked-up' | 'expired';
+  serves: number;
+  isVeg: boolean;
+  preparedOn: string;
+  bestBefore: string;
+  packaging: string;
+  pickupMethod: 'pickup' | 'dropoff' | 'either';
+  notes: string;
+  status: 'available' | 'claimed' | 'expired';
   claimedBy?: string;
-  claimedByName?: string;
   createdAt: string;
-  image?: string;
 }
 
 interface Notification {
   id: string;
-  userId: string;
+  acceptorId: string;
+  donationId: string;
   title: string;
   message: string;
-  type: 'new-food' | 'claimed' | 'picked-up' | 'expired';
   read: boolean;
   createdAt: string;
 }
 
-// ==================== CONTEXT ====================
+// ============ CONTEXT ============
 interface AppContextType {
   theme: string;
   toggleTheme: () => void;
-  currentUser: UserAccount | null;
-  setCurrentUser: (user: UserAccount | null) => void;
+  user: User | null;
+  setUser: (u: User | null) => void;
   donations: FoodDonation[];
-  setDonations: React.Dispatch<React.SetStateAction<FoodDonation[]>>;
-  notifications: Notification[];
-  setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
-  users: UserAccount[];
   addDonation: (d: Omit<FoodDonation, 'id' | 'createdAt' | 'status'>) => void;
-  claimDonation: (donationId: string) => void;
-  addNotification: (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => void;
+  claimDonation: (id: string) => void;
+  deleteDonation: (id: string) => void;
+  notifications: Notification[];
+  markNotificationRead: (id: string) => void;
+  clearNotifications: () => void;
+  showToast: (type: 'success' | 'error' | 'warning', message: string) => void;
 }
 
-const AppContext = createContext<AppContextType>({} as AppContextType);
-function useApp() { return useContext(AppContext); }
-
-// ==================== HELPERS ====================
-const genId = () => Math.random().toString(36).slice(2, 11);
-
-const FOOD_EMOJIS: Record<string, string> = {
-  'Rice & Curry': '🍛', 'Bread & Vegetables': '🥖', 'Fruits': '🍎',
-  'Salad': '🥗', 'Baked Goods': '🥐', 'Soup': '🍲',
-  'Sandwiches': '🥪', 'Pasta': '🍝', 'Other': '🍽️'
+const AppContext = createContext<AppContextType | null>(null);
+const useApp = () => {
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error('useApp must be used within AppContext');
+  return ctx;
 };
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
+// ============ HELPERS ============
+const uid = () => Math.random().toString(36).slice(2, 11);
+const LS = {
+  get: <T,>(k: string, d: T): T => {
+    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; }
+  },
+  set: (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
 
-// ==================== TOAST ====================
+// ============ TOAST ============
 function Toast({ type, message, onClose }: { type: 'success' | 'error' | 'warning'; message: string; onClose: () => void }) {
   useEffect(() => {
     const t = setTimeout(onClose, 4000);
@@ -106,261 +99,222 @@ function Toast({ type, message, onClose }: { type: 'success' | 'error' | 'warnin
   const c = config[type];
 
   return (
-    <div className={`fixed top-4 right-4 z-[100] flex items-center gap-3 px-4 py-3 rounded-xl border shadow-lg max-w-sm animate-[slideIn_0.3s_ease] ${c.bg}`}>
+    <div className={`fixed top-4 right-4 z-[100] flex items-center gap-3 px-4 py-3 rounded-xl border shadow-lg max-w-sm ${c.bg} animate-slide-in`}>
       {c.icon}
       <span className={`text-sm font-medium ${c.text}`}>{message}</span>
-      <button onClick={onClose} className="ml-1 p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors" aria-label="Close">
+      <button onClick={onClose} className="ml-2 p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors" aria-label="Close">
         <X className="w-4 h-4" />
       </button>
     </div>
   );
 }
 
-// ==================== LOGIN PAGE ====================
-function LoginPage() {
-  const { setCurrentUser, users } = useApp();
-  const [role, setRole] = useState<Role>(null);
-  const [isRegister, setIsRegister] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
-
+// ============ AUTH PAGE ============
+function AuthPage() {
+  const { setUser, showToast } = useApp();
+  const [mode, setMode] = useState<AuthMode>('login');
+  const [role, setRole] = useState<Role>('donor');
   const [form, setForm] = useState({
-    name: '', email: '', phone: '', address: '', locality: '', password: ''
+    name: '', email: '', phone: '', locality: '', organization: '', password: ''
   });
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const handleLogin = () => {
-    const user = users.find(u => u.email === form.email && u.password === form.password && u.role === role);
-    if (user) {
-      setCurrentUser(user);
-      setToast({ type: 'success', message: `Welcome back, ${user.name}!` });
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (mode === 'register') {
+      if (!form.name.trim()) e.name = 'Name is required';
+      if (!form.phone.trim()) e.phone = 'Phone is required';
+      else if (!/^\d{10}$/.test(form.phone)) e.phone = 'Enter a valid 10-digit phone';
+      if (!form.locality.trim()) e.locality = 'Locality is required';
+      if (role === 'acceptor' && !form.organization.trim()) e.organization = 'Organization name is required';
+    }
+    if (!form.email.trim()) e.email = 'Email is required';
+    else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = 'Enter a valid email';
+    if (!form.password.trim()) e.password = 'Password is required';
+    else if (form.password.length < 6) e.password = 'Password must be at least 6 characters';
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
+  const handleSubmit = (ev: React.FormEvent) => {
+    ev.preventDefault();
+    if (!validate()) return;
+
+    const users = LS.get<Record<string, User>>('ff_users', {});
+
+    if (mode === 'register') {
+      if (users[form.email]) {
+        showToast('error', 'An account with this email already exists');
+        return;
+      }
+      const newUser: User = {
+        id: uid(),
+        name: form.name,
+        email: form.email,
+        phone: form.phone,
+        locality: form.locality,
+        role,
+        organization: role === 'acceptor' ? form.organization : undefined,
+      };
+      users[form.email] = newUser;
+      LS.set('ff_users', users);
+      LS.set('ff_current_user', newUser);
+      setUser(newUser);
+      showToast('success', `Welcome to FreshFlow, ${newUser.name}!`);
     } else {
-      setToast({ type: 'error', message: 'Invalid email or password' });
+      const user = users[form.email];
+      if (!user) {
+        showToast('error', 'No account found with this email');
+        return;
+      }
+      LS.set('ff_current_user', user);
+      setUser(user);
+      showToast('success', `Welcome back, ${user.name}!`);
     }
   };
 
-  const handleRegister = () => {
-    if (!form.name || !form.email || !form.phone || !form.address || !form.locality || !form.password) {
-      setToast({ type: 'error', message: 'Please fill in all fields' });
-      return;
-    }
-    if (users.find(u => u.email === form.email)) {
-      setToast({ type: 'error', message: 'Email already registered' });
-      return;
-    }
-    const newUser: UserAccount = {
-      id: genId(),
-      role: role!,
-      ...form,
-    };
-    setCurrentUser(newUser);
-    setToast({ type: 'success', message: 'Account created successfully!' });
-  };
-
-  if (!role) {
-    return (
-      <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center p-4 transition-theme">
-        <div className="w-full max-w-md">
-          {/* Hero Image */}
-          <div className="relative rounded-2xl overflow-hidden mb-6 shadow-lg">
-            <img
-              src="https://image.qwenlm.ai/generated-images/b1042c90-754d-43f4-9803-4f19542c1174/_result.png"
-              alt="Hands sharing food"
-              className="w-full h-48 object-cover"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-forest/60 to-transparent" />
-            <div className="absolute bottom-4 left-4 right-4">
-              <h1 className="text-2xl font-bold text-white">ShareMeal</h1>
-              <p className="text-white/90 text-sm">Share food, share love. No one goes hungry.</p>
-            </div>
-          </div>
-
-          {/* Logo */}
-          <div className="text-center mb-6">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-forest mb-3 shadow-lg shadow-forest/20">
-              <HeartHandshake className="w-7 h-7 text-white" />
-            </div>
-            <h2 className="text-lg font-semibold text-[var(--text-primary)]">How would you like to help?</h2>
-          </div>
-
-          {/* Role Selection */}
-          <div className="space-y-4">
-            <button
-              onClick={() => setRole('donor')}
-              className="w-full bg-[var(--bg-card)] border-2 border-[var(--border-color)] rounded-2xl p-6 text-left hover:border-forest hover:shadow-lg hover:shadow-forest/10 transition-all duration-300 group"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-xl bg-forest/10 flex items-center justify-center group-hover:bg-forest group-hover:text-white transition-colors">
-                  <Heart className="w-7 h-7 text-forest group-hover:text-white transition-colors" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">I'm a Donor</h3>
-                  <p className="text-sm text-[var(--text-muted)]">I have food to share with those in need</p>
-                </div>
-                <ArrowRight className="w-5 h-5 text-[var(--text-muted)] group-hover:text-forest transition-colors" />
-              </div>
-            </button>
-
-            <button
-              onClick={() => setRole('acceptor')}
-              className="w-full bg-[var(--bg-card)] border-2 border-[var(--border-color)] rounded-2xl p-6 text-left hover:border-forest hover:shadow-lg hover:shadow-forest/10 transition-all duration-300 group"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-xl bg-cream dark:bg-forest/10 flex items-center justify-center group-hover:bg-forest group-hover:text-white transition-colors">
-                  <Users className="w-7 h-7 text-forest group-hover:text-white transition-colors" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">I'm an Acceptor</h3>
-                  <p className="text-sm text-[var(--text-muted)]">I need food or want to collect donations</p>
-                </div>
-                <ArrowRight className="w-5 h-5 text-[var(--text-muted)] group-hover:text-forest transition-colors" />
-              </div>
-            </button>
-          </div>
-
-          <p className="text-center text-xs text-[var(--text-muted)] mt-8">
-            Together we can reduce food waste and feed the hungry 🌱
-          </p>
-        </div>
-      </div>
-    );
-  }
+  const update = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center p-4 transition-theme">
-      {toast && <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} />}
-      <div className="w-full max-w-md">
-        {/* Back button */}
-        <button
-          onClick={() => { setRole(null); setIsRegister(false); setForm({ name: '', email: '', phone: '', address: '', locality: '', password: '' }); }}
-          className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-forest mb-6 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back to role selection
-        </button>
-
-        <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-6 lg:p-8 shadow-sm">
-          {/* Header */}
-          <div className="text-center mb-6">
-            <div className={`inline-flex items-center justify-center w-12 h-12 rounded-xl mb-3 ${role === 'donor' ? 'bg-forest/10' : 'bg-cream dark:bg-forest/10'}`}>
-              {role === 'donor' ? <Heart className="w-6 h-6 text-forest" /> : <Users className="w-6 h-6 text-forest" />}
+    <div className="min-h-screen flex flex-col lg:flex-row bg-[var(--bg-primary)]">
+      {/* Left side - Branding */}
+      <div className="lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-forest via-forest to-forest-light p-8 lg:p-16 flex flex-col justify-between text-white min-h-[280px] lg:min-h-screen">
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-11 h-11 rounded-xl bg-white/15 backdrop-blur flex items-center justify-center">
+              <Leaf className="w-6 h-6" />
             </div>
-            <h2 className="text-xl font-bold text-[var(--text-primary)]">
-              {isRegister ? 'Create Account' : 'Welcome Back'}
+            <div>
+              <h1 className="text-2xl font-bold">FreshFlow</h1>
+              <p className="text-xs text-white/70">Nourish • Share • Sustain</p>
+            </div>
+          </div>
+          <div className="hidden lg:block max-w-md">
+            <h2 className="text-4xl font-bold leading-tight mb-4">
+              No food should go to waste.
             </h2>
-            <p className="text-sm text-[var(--text-muted)] mt-1">
-              {role === 'donor' ? 'Food Donor' : 'Food Acceptor'} {isRegister ? 'Registration' : 'Login'}
+            <p className="text-white/80 text-lg">
+              Connect donors with those in need. Every meal shared is a step toward a hunger-free community.
             </p>
           </div>
+        </div>
 
-          {/* Form */}
-          <div className="space-y-4">
-            {isRegister && (
+        <div className="relative z-10 hidden lg:block">
+          <div className="flex gap-6">
+            {[
+              { icon: <Gift className="w-5 h-5" />, label: '500+ Donations' },
+              { icon: <Users className="w-5 h-5" />, label: '200+ Families' },
+              { icon: <Heart className="w-5 h-5" />, label: 'Zero Waste' },
+            ].map((s, i) => (
+              <div key={i} className="flex items-center gap-2 text-sm text-white/90">
+                {s.icon}
+                <span>{s.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Decorative circles */}
+        <div className="absolute -top-20 -right-20 w-80 h-80 rounded-full bg-white/5" />
+        <div className="absolute -bottom-32 -left-20 w-96 h-96 rounded-full bg-white/5" />
+      </div>
+
+      {/* Right side - Form */}
+      <div className="lg:w-1/2 flex items-center justify-center p-6 lg:p-12">
+        <div className="w-full max-w-md">
+          {/* Mobile logo */}
+          <div className="lg:hidden flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-xl bg-forest flex items-center justify-center">
+              <Leaf className="w-5 h-5 text-white" />
+            </div>
+            <h1 className="text-xl font-bold text-[var(--text-primary)]">FreshFlow</h1>
+          </div>
+
+          <h2 className="text-3xl font-bold text-[var(--text-primary)] mb-2">
+            {mode === 'login' ? 'Welcome back' : 'Create your account'}
+          </h2>
+          <p className="text-[var(--text-muted)] mb-8">
+            {mode === 'login' ? 'Sign in to continue your journey of sharing.' : 'Join the movement to end food waste.'}
+          </p>
+
+          {/* Role selector (only in register) */}
+          {mode === 'register' && (
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">I want to</label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setRole('donor')}
+                  className={`p-4 rounded-xl border-2 text-left transition-all ${
+                    role === 'donor'
+                      ? 'border-forest bg-forest/5'
+                      : 'border-[var(--border-color)] hover:border-forest/40'
+                  }`}
+                >
+                  <ChefHat className={`w-6 h-6 mb-2 ${role === 'donor' ? 'text-forest' : 'text-[var(--text-muted)]'}`} />
+                  <p className={`font-semibold ${role === 'donor' ? 'text-forest' : 'text-[var(--text-primary)]'}`}>Donate Food</p>
+                  <p className="text-xs text-[var(--text-muted)] mt-1">I have food to share</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRole('acceptor')}
+                  className={`p-4 rounded-xl border-2 text-left transition-all ${
+                    role === 'acceptor'
+                      ? 'border-forest bg-forest/5'
+                      : 'border-[var(--border-color)] hover:border-forest/40'
+                  }`}
+                >
+                  <Gift className={`w-6 h-6 mb-2 ${role === 'acceptor' ? 'text-forest' : 'text-[var(--text-muted)]'}`} />
+                  <p className={`font-semibold ${role === 'acceptor' ? 'text-forest' : 'text-[var(--text-primary)]'}`}>Receive Food</p>
+                  <p className="text-xs text-[var(--text-muted)] mt-1">I need food for my community</p>
+                </button>
+              </div>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === 'register' && (
               <>
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Full Name</label>
-                  <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                    <input
-                      type="text"
-                      value={form.name}
-                      onChange={e => setForm({ ...form, name: e.target.value })}
-                      placeholder="Enter your full name"
-                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Phone Number</label>
-                  <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                    <input
-                      type="tel"
-                      value={form.phone}
-                      onChange={e => setForm({ ...form, phone: e.target.value })}
-                      placeholder="+1 (555) 000-0000"
-                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Address</label>
-                  <div className="relative">
-                    <Home className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                    <input
-                      type="text"
-                      value={form.address}
-                      onChange={e => setForm({ ...form, address: e.target.value })}
-                      placeholder="Street address"
-                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Locality / Area</label>
-                  <div className="relative">
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                    <input
-                      type="text"
-                      value={form.locality}
-                      onChange={e => setForm({ ...form, locality: e.target.value })}
-                      placeholder="e.g., Downtown, North Side, Sector 5"
-                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                    />
-                  </div>
-                  <p className="text-xs text-[var(--text-muted)] mt-1">We'll notify you when food is available in your area</p>
-                </div>
+                <FormField label="Full Name" icon={<UserIcon className="w-4 h-4" />} error={errors.name}>
+                  <input type="text" value={form.name} onChange={e => update('name', e.target.value)} placeholder="John Doe" className="form-input" />
+                </FormField>
+                <FormField label="Phone Number" icon={<Phone className="w-4 h-4" />} error={errors.phone}>
+                  <input type="tel" value={form.phone} onChange={e => update('phone', e.target.value)} placeholder="9876543210" className="form-input" />
+                </FormField>
+                <FormField label="Your Locality / Area" icon={<MapPin className="w-4 h-4" />} error={errors.locality}>
+                  <input type="text" value={form.locality} onChange={e => update('locality', e.target.value)} placeholder="e.g. Koramangala, Bengaluru" className="form-input" />
+                </FormField>
+                {role === 'acceptor' && (
+                  <FormField label="Organization / NGO Name" icon={<Building2 className="w-4 h-4" />} error={errors.organization}>
+                    <input type="text" value={form.organization} onChange={e => update('organization', e.target.value)} placeholder="e.g. Akshaya Patra" className="form-input" />
+                  </FormField>
+                )}
               </>
             )}
 
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Email</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                <input
-                  type="email"
-                  value={form.email}
-                  onChange={e => setForm({ ...form, email: e.target.value })}
-                  placeholder="your@email.com"
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={form.password}
-                  onChange={e => setForm({ ...form, password: e.target.value })}
-                  placeholder="••••••••"
-                  className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
+            <FormField label="Email Address" icon={<Mail className="w-4 h-4" />} error={errors.email}>
+              <input type="email" value={form.email} onChange={e => update('email', e.target.value)} placeholder="you@example.com" className="form-input" />
+            </FormField>
+            <FormField label="Password" icon={<XCircle className="w-4 h-4" />} error={errors.password}>
+              <input type="password" value={form.password} onChange={e => update('password', e.target.value)} placeholder="••••••••" className="form-input" />
+            </FormField>
 
             <button
-              onClick={isRegister ? handleRegister : handleLogin}
-              className="w-full py-3 bg-forest text-white rounded-xl text-sm font-semibold hover:bg-forest-dark transition-colors shadow-md shadow-forest/20 mt-2"
+              type="submit"
+              className="w-full py-3 bg-forest text-white rounded-xl font-semibold hover:bg-forest-dark transition-colors shadow-md shadow-forest/20 flex items-center justify-center gap-2"
             >
-              {isRegister ? 'Create Account' : 'Sign In'}
+              {mode === 'login' ? 'Sign In' : `Create ${role === 'donor' ? 'Donor' : 'Acceptor'} Account`}
+              <ArrowRight className="w-4 h-4" />
             </button>
-          </div>
+          </form>
 
-          <div className="mt-5 text-center">
+          <div className="mt-6 text-center text-sm text-[var(--text-muted)]">
+            {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
             <button
-              onClick={() => setIsRegister(!isRegister)}
-              className="text-sm text-forest hover:text-forest-dark font-medium transition-colors"
+              onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setErrors({}); }}
+              className="text-forest font-semibold hover:underline"
             >
-              {isRegister ? 'Already have an account? Sign In' : "Don't have an account? Register"}
+              {mode === 'login' ? 'Sign up' : 'Sign in'}
             </button>
           </div>
         </div>
@@ -369,738 +323,678 @@ function LoginPage() {
   );
 }
 
-// ==================== DONOR DASHBOARD ====================
+function FormField({ label, icon, error, children }: { label: string; icon?: React.ReactNode; error?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">{label}</label>
+      <div className="relative">
+        {icon && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]">{icon}</span>}
+        <div className={icon ? 'pl-10' : ''}>{children}</div>
+      </div>
+      {error && <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{error}</p>}
+    </div>
+  );
+}
+
+// ============ HEADER ============
+function Header() {
+  const { theme, toggleTheme, user, setUser, notifications } = useApp();
+  const [showNotif, setShowNotif] = useState(false);
+  const unread = notifications.filter(n => !n.read).length;
+
+  return (
+    <header className="sticky top-0 z-30 bg-[var(--bg-primary)]/80 backdrop-blur-xl border-b border-[var(--border-color)]">
+      <div className="flex items-center gap-4 px-4 lg:px-6 py-3">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-forest flex items-center justify-center">
+            <Leaf className="w-5 h-5 text-white" />
+          </div>
+          <div className="hidden sm:block">
+            <h1 className="text-lg font-bold text-[var(--text-primary)]">FreshFlow</h1>
+          </div>
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Notification bell */}
+        <div className="relative">
+          <button
+            onClick={() => setShowNotif(s => !s)}
+            className="relative p-2.5 rounded-xl hover:bg-[var(--hover-bg)] transition-colors"
+            aria-label="Notifications"
+          >
+            <Bell className="w-5 h-5 text-[var(--text-secondary)]" />
+            {unread > 0 && (
+              <span className="absolute top-1 right-1 min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                {unread}
+              </span>
+            )}
+          </button>
+          {showNotif && <NotificationPanel onClose={() => setShowNotif(false)} />}
+        </div>
+
+        <button
+          onClick={toggleTheme}
+          className="p-2.5 rounded-xl hover:bg-[var(--hover-bg)] transition-colors"
+          aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+        >
+          {theme === 'light' ? <Moon className="w-5 h-5 text-[var(--text-secondary)]" /> : <Sun className="w-5 h-5 text-[var(--text-secondary)]" />}
+        </button>
+
+        <div className="flex items-center gap-3 pl-3 border-l border-[var(--border-color)]">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-forest to-forest-light flex items-center justify-center text-white text-sm font-semibold">
+            {user?.name.charAt(0).toUpperCase()}
+          </div>
+          <div className="hidden md:block">
+            <p className="text-sm font-medium text-[var(--text-primary)] leading-tight">{user?.name}</p>
+            <p className="text-xs text-[var(--text-muted)] capitalize">{user?.role}</p>
+          </div>
+          <button
+            onClick={() => { localStorage.removeItem('ff_current_user'); setUser(null); }}
+            className="p-2 rounded-xl hover:bg-[var(--hover-bg)] text-[var(--text-muted)] hover:text-red-500 transition-colors"
+            aria-label="Logout"
+            title="Logout"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function NotificationPanel({ onClose }: { onClose: () => void }) {
+  const { notifications, markNotificationRead, clearNotifications } = useApp();
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] shadow-xl z-50 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)]">
+          <h3 className="font-semibold text-[var(--text-primary)]">Notifications</h3>
+          {notifications.length > 0 && (
+            <button onClick={clearNotifications} className="text-xs text-forest hover:underline">Clear all</button>
+          )}
+        </div>
+        <div className="max-h-96 overflow-y-auto">
+          {notifications.length === 0 ? (
+            <div className="p-8 text-center">
+              <Bell className="w-10 h-10 text-[var(--text-muted)] mx-auto mb-2" />
+              <p className="text-sm text-[var(--text-muted)]">No notifications yet</p>
+            </div>
+          ) : (
+            notifications.slice().reverse().map(n => (
+              <button
+                key={n.id}
+                onClick={() => markNotificationRead(n.id)}
+                className={`w-full text-left p-4 border-b border-[var(--border-color)] hover:bg-[var(--hover-bg)] transition-colors ${!n.read ? 'bg-forest/5' : ''}`}
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${!n.read ? 'bg-forest text-white' : 'bg-[var(--hover-bg)] text-[var(--text-muted)]'}`}>
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm ${!n.read ? 'font-semibold text-[var(--text-primary)]' : 'font-medium text-[var(--text-secondary)]'}`}>{n.title}</p>
+                    <p className="text-xs text-[var(--text-muted)] mt-0.5">{n.message}</p>
+                    <p className="text-xs text-[var(--text-muted)] mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+                  </div>
+                  {!n.read && <span className="w-2 h-2 rounded-full bg-forest flex-shrink-0 mt-2" />}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============ DONOR DASHBOARD ============
 function DonorDashboard() {
-  const { currentUser, donations, setDonations, setCurrentUser, addNotification, users } = useApp();
-  const [tab, setTab] = useState<'donate' | 'history'>('donate');
-  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
-  const [showNotifs, setShowNotifs] = useState(false);
-
+  const { user, donations, addDonation, deleteDonation, showToast } = useApp();
+  const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
-    foodType: 'Rice & Curry',
-    quantity: '',
-    servings: '',
-    preparationDate: '',
-    expiryTime: '',
-    foodCondition: 'fresh' as 'fresh' | 'packed' | 'cooked',
-    specialNotes: '',
+    foodType: '', quantity: '', serves: '', isVeg: true,
+    preparedOn: '', bestBefore: '', packaging: '',
+    pickupMethod: 'pickup' as 'pickup' | 'dropoff' | 'either', notes: ''
   });
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const myDonations = donations.filter(d => d.donorId === currentUser?.id);
+  const myDonations = donations.filter(d => d.donorId === user?.id);
 
-  const handleDonate = () => {
-    if (!form.quantity || !form.servings || !form.preparationDate || !form.expiryTime) {
-      setToast({ type: 'error', message: 'Please fill in all required fields' });
-      return;
-    }
-
-    const newDonation: Omit<FoodDonation, 'id' | 'createdAt' | 'status'> = {
-      donorId: currentUser!.id,
-      donorName: currentUser!.name,
-      donorPhone: currentUser!.phone,
-      donorAddress: currentUser!.address,
-      locality: currentUser!.locality,
-      ...form,
-      servings: parseInt(form.servings),
-    };
-
-    // Add donation
-    const donation: FoodDonation = {
-      ...newDonation,
-      id: genId(),
-      createdAt: new Date().toISOString(),
-      status: 'available',
-    };
-    setDonations(prev => [donation, ...prev]);
-
-    // Notify acceptors in the same locality
-    const acceptorsInArea = users.filter(u => u.role === 'acceptor' && u.locality.toLowerCase() === currentUser!.locality.toLowerCase());
-    acceptorsInArea.forEach(acceptor => {
-      addNotification({
-        userId: acceptor.id,
-        title: '🍽️ Food Available Nearby!',
-        message: `${form.quantity} of ${form.foodType} is available in ${currentUser!.locality}. ${form.servings} servings.`,
-        type: 'new-food',
-      });
-    });
-
-    setForm({ foodType: 'Rice & Curry', quantity: '', servings: '', preparationDate: '', expiryTime: '', foodCondition: 'fresh', specialNotes: '' });
-    setToast({ type: 'success', message: 'Food donation listed successfully!' });
-    setTab('history');
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (!form.foodType.trim()) e.foodType = 'Required';
+    if (!form.quantity.trim()) e.quantity = 'Required';
+    if (!form.serves || Number(form.serves) < 1) e.serves = 'Enter valid number';
+    if (!form.preparedOn) e.preparedOn = 'Required';
+    if (!form.bestBefore) e.bestBefore = 'Required';
+    else if (new Date(form.bestBefore) <= new Date()) e.bestBefore = 'Must be in the future';
+    if (!form.packaging.trim()) e.packaging = 'Required';
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
 
-  const myNotifications = useApp().notifications.filter(n => n.userId === currentUser?.id);
-  const unreadCount = myNotifications.filter(n => !n.read).length;
+  const handleSubmit = (ev: React.FormEvent) => {
+    ev.preventDefault();
+    if (!validate() || !user) return;
+    addDonation({
+      donorId: user.id,
+      donorName: user.name,
+      donorPhone: user.phone,
+      donorLocality: user.locality,
+      foodType: form.foodType,
+      quantity: form.quantity,
+      serves: Number(form.serves),
+      isVeg: form.isVeg,
+      preparedOn: form.preparedOn,
+      bestBefore: form.bestBefore,
+      packaging: form.packaging,
+      pickupMethod: form.pickupMethod,
+      notes: form.notes,
+    });
+    setForm({ foodType: '', quantity: '', serves: '', isVeg: true, preparedOn: '', bestBefore: '', packaging: '', pickupMethod: 'pickup', notes: '' });
+    setShowForm(false);
+    showToast('success', 'Food listed! Acceptors in your area have been notified.');
+  };
+
+  const update = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)] transition-theme">
-      {toast && <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} />}
-
-      {/* Header */}
-      <header className="sticky top-0 z-30 bg-[var(--bg-card)]/90 backdrop-blur-xl border-b border-[var(--border-color)]">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-forest flex items-center justify-center">
-              <Leaf className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-[var(--text-primary)]">ShareMeal</h1>
-              <p className="text-xs text-[var(--text-muted)] hidden sm:block">Donor Dashboard</p>
-            </div>
+    <div className="space-y-6">
+      {/* Hero */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-forest to-forest-light p-6 lg:p-8 text-white">
+        <div className="relative z-10 max-w-2xl">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/15 backdrop-blur rounded-full text-xs font-medium mb-3">
+            <Heart className="w-3 h-3" /> Thank you for sharing
           </div>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <button
-                onClick={() => setShowNotifs(!showNotifs)}
-                className="relative p-2.5 rounded-xl hover:bg-[var(--hover-bg)] transition-colors"
-                aria-label="Notifications"
-              >
-                <Bell className="w-5 h-5 text-[var(--text-secondary)]" />
-                {unreadCount > 0 && (
-                  <span className="absolute top-1 right-1 w-4 h-4 bg-danger rounded-full text-[10px] text-white flex items-center justify-center font-bold">{unreadCount}</span>
-                )}
+          <h2 className="text-2xl lg:text-3xl font-bold mb-2">Hello, {user?.name.split(' ')[0]} 👋</h2>
+          <p className="text-white/80 text-sm lg:text-base">
+            You've shared <span className="font-bold text-white">{myDonations.length}</span> meal{myDonations.length !== 1 ? 's' : ''} with your community. Every donation matters.
+          </p>
+          <button
+            onClick={() => setShowForm(true)}
+            className="mt-5 px-5 py-2.5 bg-white text-forest rounded-xl text-sm font-semibold hover:bg-white/90 transition-colors inline-flex items-center gap-2"
+          >
+            <Package className="w-4 h-4" /> Donate Food Now
+          </button>
+        </div>
+        <div className="absolute right-0 top-0 bottom-0 w-1/3 opacity-20 hidden md:block">
+          <Apple className="w-full h-full" />
+        </div>
+      </div>
+
+      {/* Donation Form Modal */}
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setShowForm(false)}>
+          <div className="bg-[var(--bg-card)] rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto border border-[var(--border-color)] shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="sticky top-0 bg-[var(--bg-card)] border-b border-[var(--border-color)] px-6 py-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-[var(--text-primary)]">List a Food Donation</h3>
+                <p className="text-sm text-[var(--text-muted)]">Fill in the details so acceptors know what's available</p>
+              </div>
+              <button onClick={() => setShowForm(false)} className="p-2 rounded-lg hover:bg-[var(--hover-bg)]" aria-label="Close">
+                <X className="w-5 h-5" />
               </button>
-              {showNotifs && (
-                <div className="absolute right-0 top-12 w-80 bg-[var(--bg-card)] rounded-xl border border-[var(--border-color)] shadow-xl z-50 overflow-hidden">
-                  <div className="p-3 border-b border-[var(--border-color)]">
-                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Notifications</h3>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto">
-                    {myNotifications.length === 0 ? (
-                      <p className="p-4 text-sm text-[var(--text-muted)] text-center">No notifications yet</p>
-                    ) : (
-                      myNotifications.slice(0, 5).map(n => (
-                        <div key={n.id} className={`p-3 border-b border-[var(--border-color)] last:border-0 ${!n.read ? 'bg-forest/5' : ''}`}>
-                          <p className="text-sm font-medium text-[var(--text-primary)]">{n.title}</p>
-                          <p className="text-xs text-[var(--text-muted)] mt-0.5">{n.message}</p>
-                          <p className="text-xs text-[var(--text-muted)] mt-1">{timeAgo(n.createdAt)}</p>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-[var(--border-color)]">
-              <div className="w-8 h-8 rounded-lg bg-forest/10 flex items-center justify-center text-forest text-sm font-bold">
-                {currentUser?.name.charAt(0)}
-              </div>
-              <span className="text-sm font-medium text-[var(--text-primary)]">{currentUser?.name}</span>
-            </div>
-            <button
-              onClick={() => setCurrentUser(null)}
-              className="p-2.5 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20 text-[var(--text-muted)] hover:text-red-500 transition-colors"
-              aria-label="Logout"
-            >
-              <LogOut className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-5xl mx-auto px-4 py-6">
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6">
-          <button
-            onClick={() => setTab('donate')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === 'donate' ? 'bg-forest text-white shadow-md shadow-forest/20' : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border border-[var(--border-color)] hover:border-forest/30'}`}
-          >
-            <span className="flex items-center gap-2"><Package className="w-4 h-4" /> Donate Food</span>
-          </button>
-          <button
-            onClick={() => setTab('history')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === 'history' ? 'bg-forest text-white shadow-md shadow-forest/20' : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border border-[var(--border-color)] hover:border-forest/30'}`}
-          >
-            <span className="flex items-center gap-2"><Clock className="w-4 h-4" /> My Donations</span>
-          </button>
-        </div>
-
-        {tab === 'donate' ? (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Donation Form */}
-            <div className="lg:col-span-2 bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-6">
-              <h2 className="text-xl font-bold text-[var(--text-primary)] mb-1">Donate Food</h2>
-              <p className="text-sm text-[var(--text-muted)] mb-6">Fill in the details about the food you'd like to share</p>
-
-              <div className="space-y-5">
-                {/* Food Type */}
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Food Type *</label>
-                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-                    {Object.entries(FOOD_EMOJIS).map(([type, emoji]) => (
-                      <button
-                        key={type}
-                        onClick={() => setForm({ ...form, foodType: type })}
-                        className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all text-center ${form.foodType === type ? 'border-forest bg-forest/5 shadow-sm' : 'border-[var(--border-color)] hover:border-forest/30'}`}
-                      >
-                        <span className="text-2xl">{emoji}</span>
-                        <span className="text-[10px] font-medium text-[var(--text-secondary)] leading-tight">{type}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Quantity & Servings */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Quantity *</label>
-                    <input
-                      type="text"
-                      value={form.quantity}
-                      onChange={e => setForm({ ...form, quantity: e.target.value })}
-                      placeholder="e.g., 2 kg, 5 plates"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Number of Servings *</label>
-                    <input
-                      type="number"
-                      value={form.servings}
-                      onChange={e => setForm({ ...form, servings: e.target.value })}
-                      placeholder="e.g., 10"
-                      min="1"
-                      className="w-full px-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                    />
-                  </div>
-                </div>
-
-                {/* Dates */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Preparation Date *</label>
-                    <input
-                      type="date"
-                      value={form.preparationDate}
-                      onChange={e => setForm({ ...form, preparationDate: e.target.value })}
-                      className="w-full px-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Best Before / Expiry *</label>
-                    <input
-                      type="time"
-                      value={form.expiryTime}
-                      onChange={e => setForm({ ...form, expiryTime: e.target.value })}
-                      className="w-full px-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                    />
-                  </div>
-                </div>
-
-                {/* Food Condition */}
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Food Condition</label>
-                  <div className="flex gap-3">
-                    {(['fresh', 'packed', 'cooked'] as const).map(cond => (
-                      <button
-                        key={cond}
-                        onClick={() => setForm({ ...form, foodCondition: cond })}
-                        className={`px-4 py-2 rounded-xl text-sm font-medium border-2 transition-all capitalize ${form.foodCondition === cond ? 'border-forest bg-forest/5 text-forest' : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:border-forest/30'}`}
-                      >
-                        {cond}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Special Notes */}
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Special Notes</label>
-                  <textarea
-                    value={form.specialNotes}
-                    onChange={e => setForm({ ...form, specialNotes: e.target.value })}
-                    placeholder="Any allergies, dietary info, pickup instructions..."
-                    rows={3}
-                    className="w-full px-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all resize-none"
-                  />
-                </div>
-
-                {/* Pickup Info */}
-                <div className="bg-cream dark:bg-forest/5 rounded-xl p-4 border border-cream-dark dark:border-forest/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <MapPin className="w-4 h-4 text-forest" />
-                    <span className="text-sm font-medium text-[var(--text-primary)]">Pickup Location</span>
-                  </div>
-                  <p className="text-sm text-[var(--text-secondary)]">{currentUser?.address}</p>
-                  <p className="text-xs text-[var(--text-muted)] mt-1">Locality: {currentUser?.locality}</p>
-                </div>
-
-                <button
-                  onClick={handleDonate}
-                  className="w-full py-3 bg-forest text-white rounded-xl text-sm font-semibold hover:bg-forest-dark transition-colors shadow-md shadow-forest/20 flex items-center justify-center gap-2"
-                >
-                  <Heart className="w-4 h-4" /> List Food for Donation
-                </button>
-              </div>
             </div>
 
-            {/* Sidebar Info */}
-            <div className="space-y-4">
-              <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-5">
-                <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Your Stats</h3>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-[var(--text-muted)]">Total Donations</span>
-                    <span className="text-lg font-bold text-forest">{myDonations.length}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-[var(--text-muted)]">People Fed</span>
-                    <span className="text-lg font-bold text-forest">{myDonations.reduce((sum, d) => sum + d.servings, 0)}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-[var(--text-muted)]">Available Now</span>
-                    <span className="text-lg font-bold text-forest">{myDonations.filter(d => d.status === 'available').length}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-cream dark:bg-forest/5 rounded-2xl p-5 border border-cream-dark dark:border-forest/20">
-                <div className="flex items-center gap-2 mb-3">
-                  <Sparkles className="w-4 h-4 text-forest" />
-                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">Guidelines</h3>
-                </div>
-                <ul className="space-y-2 text-xs text-[var(--text-secondary)]">
-                  <li className="flex items-start gap-2"><CheckCircle2 className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" /> Food should be fresh and hygienic</li>
-                  <li className="flex items-start gap-2"><CheckCircle2 className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" /> Pack food properly in containers</li>
-                  <li className="flex items-start gap-2"><CheckCircle2 className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" /> Mention any allergens clearly</li>
-                  <li className="flex items-start gap-2"><CheckCircle2 className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" /> Set accurate expiry times</li>
-                  <li className="flex items-start gap-2"><XCircle className="w-3.5 h-3.5 text-red-400 mt-0.5 flex-shrink-0" /> No spoiled or expired food</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        ) : (
-          /* Donation History */
-          <div className="space-y-4">
-            {myDonations.length === 0 ? (
-              <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-16 text-center">
-                <Package className="w-16 h-16 text-[var(--text-muted)] mx-auto mb-4" />
-                <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-1">No donations yet</h3>
-                <p className="text-sm text-[var(--text-muted)]">Start by listing food for donation</p>
-                <button onClick={() => setTab('donate')} className="mt-4 px-5 py-2.5 bg-forest text-white rounded-xl text-sm font-semibold hover:bg-forest-dark transition-colors">
-                  Donate Now
-                </button>
-              </div>
-            ) : (
-              myDonations.map(d => (
-                <div key={d.id} className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-5 hover:shadow-lg hover:shadow-[var(--shadow-color)] transition-all duration-300">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-cream dark:bg-forest/10 flex items-center justify-center text-2xl">
-                        {FOOD_EMOJIS[d.foodType] || '🍽️'}
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-semibold text-[var(--text-primary)]">{d.foodType}</h4>
-                        <p className="text-xs text-[var(--text-muted)]">{d.quantity} • {d.servings} servings</p>
-                        <p className="text-xs text-[var(--text-muted)] mt-0.5">Listed {timeAgo(d.createdAt)}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <StatusBadge status={d.status} />
-                      {d.claimedByName && (
-                        <span className="text-xs text-[var(--text-muted)]">Claimed by {d.claimedByName}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </main>
-    </div>
-  );
-}
-
-// ==================== ACCEPTOR DASHBOARD ====================
-function AcceptorDashboard() {
-  const { currentUser, donations, setDonations, setCurrentUser, notifications, setNotifications, addNotification } = useApp();
-  const [tab, setTab] = useState<'available' | 'my-claims'>('available');
-  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
-  const [showNotifs, setShowNotifs] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterLocality, setFilterLocality] = useState('all');
-
-  const myClaims = donations.filter(d => d.claimedBy === currentUser?.id);
-  const myNotifications = notifications.filter(n => n.userId === currentUser?.id);
-  const unreadCount = myNotifications.filter(n => !n.read).length;
-
-  // Available donations (not claimed, not expired)
-  const availableDonations = donations.filter(d => d.status === 'available');
-
-  // Filter by locality and search
-  const filteredDonations = availableDonations.filter(d => {
-    const matchesSearch = !searchQuery || d.foodType.toLowerCase().includes(searchQuery.toLowerCase()) || d.donorName.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesLocality = filterLocality === 'all' || d.locality.toLowerCase() === filterLocality.toLowerCase();
-    return matchesSearch && matchesLocality;
-  });
-
-  // Get unique localities
-  const localities = [...new Set(availableDonations.map(d => d.locality))];
-
-  const handleClaim = (donation: FoodDonation) => {
-    setDonations(prev => prev.map(d =>
-      d.id === donation.id ? { ...d, status: 'claimed' as const, claimedBy: currentUser!.id, claimedByName: currentUser!.name } : d
-    ));
-    // Notify donor
-    addNotification({
-      userId: donation.donorId,
-      title: '✅ Donation Claimed!',
-      message: `${currentUser!.name} has claimed your ${donation.foodType} donation.`,
-      type: 'claimed',
-    });
-    setToast({ type: 'success', message: `You claimed ${donation.foodType}! Contact the donor to arrange pickup.` });
-  };
-
-  const markAllRead = () => {
-    setNotifications(prev => prev.map(n => n.userId === currentUser?.id ? { ...n, read: true } : n));
-  };
-
-  return (
-    <div className="min-h-screen bg-[var(--bg-primary)] transition-theme">
-      {toast && <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} />}
-
-      {/* Header */}
-      <header className="sticky top-0 z-30 bg-[var(--bg-card)]/90 backdrop-blur-xl border-b border-[var(--border-color)]">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-forest flex items-center justify-center">
-              <Leaf className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-[var(--text-primary)]">ShareMeal</h1>
-              <p className="text-xs text-[var(--text-muted)] hidden sm:block">Acceptor Dashboard</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <button
-                onClick={() => { setShowNotifs(!showNotifs); if (!showNotifs) markAllRead(); }}
-                className="relative p-2.5 rounded-xl hover:bg-[var(--hover-bg)] transition-colors"
-                aria-label="Notifications"
-              >
-                {unreadCount > 0 ? <BellRing className="w-5 h-5 text-forest" /> : <Bell className="w-5 h-5 text-[var(--text-secondary)]" />}
-                {unreadCount > 0 && (
-                  <span className="absolute top-1 right-1 w-4 h-4 bg-danger rounded-full text-[10px] text-white flex items-center justify-center font-bold">{unreadCount}</span>
-                )}
-              </button>
-              {showNotifs && (
-                <div className="absolute right-0 top-12 w-80 sm:w-96 bg-[var(--bg-card)] rounded-xl border border-[var(--border-color)] shadow-xl z-50 overflow-hidden">
-                  <div className="p-3 border-b border-[var(--border-color)] flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Notifications</h3>
-                    {unreadCount > 0 && <span className="text-xs text-forest font-medium">{unreadCount} new</span>}
-                  </div>
-                  <div className="max-h-72 overflow-y-auto">
-                    {myNotifications.length === 0 ? (
-                      <p className="p-6 text-sm text-[var(--text-muted)] text-center">No notifications yet. We'll alert you when food is available nearby!</p>
-                    ) : (
-                      myNotifications.slice(0, 10).map(n => (
-                        <div key={n.id} className={`p-3 border-b border-[var(--border-color)] last:border-0 ${!n.read ? 'bg-forest/5' : ''}`}>
-                          <p className="text-sm font-medium text-[var(--text-primary)]">{n.title}</p>
-                          <p className="text-xs text-[var(--text-muted)] mt-0.5">{n.message}</p>
-                          <p className="text-xs text-[var(--text-muted)] mt-1">{timeAgo(n.createdAt)}</p>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-[var(--border-color)]">
-              <div className="w-8 h-8 rounded-lg bg-cream flex items-center justify-center text-forest text-sm font-bold">
-                {currentUser?.name.charAt(0)}
-              </div>
-              <span className="text-sm font-medium text-[var(--text-primary)]">{currentUser?.name}</span>
-            </div>
-            <button
-              onClick={() => setCurrentUser(null)}
-              className="p-2.5 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20 text-[var(--text-muted)] hover:text-red-500 transition-colors"
-              aria-label="Logout"
-            >
-              <LogOut className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-5xl mx-auto px-4 py-6">
-        {/* Notification Banner for new food */}
-        {myNotifications.filter(n => n.type === 'new-food' && !n.read).length > 0 && tab === 'available' && (
-          <div className="mb-6 bg-cream dark:bg-forest/10 border border-cream-dark dark:border-forest/20 rounded-2xl p-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-forest/10 flex items-center justify-center flex-shrink-0">
-              <BellRing className="w-5 h-5 text-forest" />
-            </div>
-            <div className="flex-1">
-              <p className="text-sm font-semibold text-[var(--text-primary)]">
-                🎉 New food available in your area!
-              </p>
-              <p className="text-xs text-[var(--text-muted)]">
-                {myNotifications.filter(n => n.type === 'new-food' && !n.read).length} new donation(s) listed nearby
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6">
-          <button
-            onClick={() => setTab('available')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === 'available' ? 'bg-forest text-white shadow-md shadow-forest/20' : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border border-[var(--border-color)] hover:border-forest/30'}`}
-          >
-            <span className="flex items-center gap-2"><Utensils className="w-4 h-4" /> Available Food</span>
-          </button>
-          <button
-            onClick={() => setTab('my-claims')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === 'my-claims' ? 'bg-forest text-white shadow-md shadow-forest/20' : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border border-[var(--border-color)] hover:border-forest/30'}`}
-          >
-            <span className="flex items-center gap-2"><Heart className="w-4 h-4" /> My Claims</span>
-            {myClaims.length > 0 && (
-              <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${tab === 'my-claims' ? 'bg-white/20' : 'bg-forest/10 text-forest'}`}>{myClaims.length}</span>
-            )}
-          </button>
-        </div>
-
-        {tab === 'available' ? (
-          <div className="space-y-4">
-            {/* Search & Filter */}
-            <div className="flex flex-col sm:flex-row gap-3">
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search food type or donor..."
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
-                />
-              </div>
-              <div className="relative">
-                <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-                <select
-                  value={filterLocality}
-                  onChange={e => setFilterLocality(e.target.value)}
-                  className="pl-10 pr-8 py-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all appearance-none cursor-pointer"
-                >
-                  <option value="all">All Localities</option>
-                  {localities.map(l => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-            </div>
-
-            {/* Available Donations Grid */}
-            {filteredDonations.length === 0 ? (
-              <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-16 text-center">
-                <Utensils className="w-16 h-16 text-[var(--text-muted)] mx-auto mb-4" />
-                <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-1">No food available</h3>
-                <p className="text-sm text-[var(--text-muted)]">
-                  {searchQuery || filterLocality !== 'all'
-                    ? 'Try adjusting your search or filters'
-                    : 'Check back soon — donors will list food in your area!'
-                  }
-                </p>
-              </div>
-            ) : (
+            <form onSubmit={handleSubmit} className="p-6 space-y-5">
+              {/* Food type + veg toggle */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {filteredDonations.map(d => (
-                  <div key={d.id} className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-5 hover:shadow-lg hover:shadow-[var(--shadow-color)] transition-all duration-300 hover:-translate-y-0.5">
-                    <div className="flex items-start gap-4">
-                      <div className="w-14 h-14 rounded-xl bg-cream dark:bg-forest/10 flex items-center justify-center text-3xl flex-shrink-0">
-                        {FOOD_EMOJIS[d.foodType] || '🍽️'}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2">
-                          <h4 className="text-base font-semibold text-[var(--text-primary)]">{d.foodType}</h4>
-                          <span className="text-xs text-[var(--text-muted)] whitespace-nowrap">{timeAgo(d.createdAt)}</span>
-                        </div>
-                        <p className="text-sm text-[var(--text-secondary)] mt-0.5">{d.quantity} • {d.servings} servings</p>
-                        <div className="flex items-center gap-1.5 mt-2 text-xs text-[var(--text-muted)]">
-                          <MapPin className="w-3 h-3" />
-                          {d.locality}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--text-muted)]">
-                          <User className="w-3 h-3" />
-                          {d.donorName}
-                        </div>
-                        <div className="flex items-center gap-3 mt-3">
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-forest/10 text-forest font-medium capitalize">{d.foodCondition}</span>
-                          <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
-                            <Clock className="w-3 h-3" /> Before {d.expiryTime}
-                          </span>
-                        </div>
-                        {d.specialNotes && (
-                          <p className="text-xs text-[var(--text-muted)] mt-2 italic">"{d.specialNotes}"</p>
-                        )}
-                        <button
-                          onClick={() => handleClaim(d)}
-                          className="mt-4 w-full py-2.5 bg-forest text-white rounded-xl text-sm font-semibold hover:bg-forest-dark transition-colors flex items-center justify-center gap-2"
-                        >
-                          <Heart className="w-4 h-4" /> Claim This Food
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Food Type *</label>
+                  <input type="text" value={form.foodType} onChange={e => update('foodType', e.target.value)} placeholder="e.g. Cooked Rice & Dal" className="form-input" />
+                  {errors.foodType && <p className="text-xs text-red-500 mt-1">{errors.foodType}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Quantity *</label>
+                  <input type="text" value={form.quantity} onChange={e => update('quantity', e.target.value)} placeholder="e.g. 5 kg, 10 plates" className="form-input" />
+                  {errors.quantity && <p className="text-xs text-red-500 mt-1">{errors.quantity}</p>}
+                </div>
               </div>
-            )}
-          </div>
-        ) : (
-          /* My Claims */
-          <div className="space-y-4">
-            {myClaims.length === 0 ? (
-              <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-16 text-center">
-                <Heart className="w-16 h-16 text-[var(--text-muted)] mx-auto mb-4" />
-                <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-1">No claims yet</h3>
-                <p className="text-sm text-[var(--text-muted)]">Browse available food donations and claim what you need</p>
-                <button onClick={() => setTab('available')} className="mt-4 px-5 py-2.5 bg-forest text-white rounded-xl text-sm font-semibold hover:bg-forest-dark transition-colors">
-                  Browse Food
-                </button>
-              </div>
-            ) : (
-              myClaims.map(d => (
-                <div key={d.id} className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] p-5 hover:shadow-lg hover:shadow-[var(--shadow-color)] transition-all duration-300">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-cream dark:bg-forest/10 flex items-center justify-center text-2xl">
-                        {FOOD_EMOJIS[d.foodType] || '🍽️'}
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-semibold text-[var(--text-primary)]">{d.foodType}</h4>
-                        <p className="text-xs text-[var(--text-muted)]">{d.quantity} • {d.servings} servings</p>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
-                            <User className="w-3 h-3" /> {d.donorName}
-                          </span>
-                          <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
-                            <Phone className="w-3 h-3" /> {d.donorPhone}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <StatusBadge status={d.status} />
-                    </div>
-                  </div>
-                  <div className="mt-3 pt-3 border-t border-[var(--border-color)]">
-                    <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-                      <MapPin className="w-3 h-3" />
-                      <span>Pickup: {d.donorAddress}, {d.locality}</span>
-                    </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Serves approx. *</label>
+                  <input type="number" min="1" value={form.serves} onChange={e => update('serves', e.target.value)} placeholder="Number of people" className="form-input" />
+                  {errors.serves && <p className="text-xs text-red-500 mt-1">{errors.serves}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Food Type *</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => update('isVeg', true)} className={`py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${form.isVeg ? 'border-green-600 bg-green-50 dark:bg-green-900/20 text-green-700' : 'border-[var(--border-color)] text-[var(--text-secondary)]'}`}>
+                      🟢 Veg
+                    </button>
+                    <button type="button" onClick={() => update('isVeg', false)} className={`py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${!form.isVeg ? 'border-red-600 bg-red-50 dark:bg-red-900/20 text-red-700' : 'border-[var(--border-color)] text-[var(--text-secondary)]'}`}>
+                      🔴 Non-Veg
+                    </button>
                   </div>
                 </div>
-              ))
-            )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Prepared On *</label>
+                  <input type="datetime-local" value={form.preparedOn} onChange={e => update('preparedOn', e.target.value)} className="form-input" />
+                  {errors.preparedOn && <p className="text-xs text-red-500 mt-1">{errors.preparedOn}</p>}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Best Before *</label>
+                  <input type="datetime-local" value={form.bestBefore} onChange={e => update('bestBefore', e.target.value)} className="form-input" />
+                  {errors.bestBefore && <p className="text-xs text-red-500 mt-1">{errors.bestBefore}</p>}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Packaging Details *</label>
+                <input type="text" value={form.packaging} onChange={e => update('packaging', e.target.value)} placeholder="e.g. Steel containers, sealed bags" className="form-input" />
+                {errors.packaging && <p className="text-xs text-red-500 mt-1">{errors.packaging}</p>}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Handover Preference</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['pickup', 'dropoff', 'either'] as const).map(m => (
+                    <button key={m} type="button" onClick={() => update('pickupMethod', m)} className={`py-2.5 rounded-xl text-sm font-medium border-2 transition-all capitalize ${form.pickupMethod === m ? 'border-forest bg-forest/5 text-forest' : 'border-[var(--border-color)] text-[var(--text-secondary)]'}`}>
+                      {m === 'pickup' ? '🚶 Pickup' : m === 'dropoff' ? '🚗 Drop-off' : '🤝 Either'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Additional Notes</label>
+                <textarea value={form.notes} onChange={e => update('notes', e.target.value)} rows={3} placeholder="Allergens, spice level, any special instructions..." className="form-input resize-none" />
+              </div>
+
+              <div className="bg-cream dark:bg-forest/10 border border-cream-dark dark:border-forest/20 rounded-xl p-4 flex gap-3">
+                <MapPin className="w-5 h-5 text-forest flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-[var(--text-primary)]">Pickup Location</p>
+                  <p className="text-sm text-[var(--text-muted)]">{user?.locality}</p>
+                  <p className="text-xs text-[var(--text-muted)] mt-1">Acceptors in this locality will be notified</p>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setShowForm(false)} className="flex-1 py-3 border border-[var(--border-color)] rounded-xl font-semibold text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors">
+                  Cancel
+                </button>
+                <button type="submit" className="flex-1 py-3 bg-forest text-white rounded-xl font-semibold hover:bg-forest-dark transition-colors shadow-md shadow-forest/20">
+                  List Donation
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* My Donations */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-[var(--text-primary)]">My Donations</h3>
+          <span className="text-sm text-[var(--text-muted)]">{myDonations.length} total</span>
+        </div>
+
+        {myDonations.length === 0 ? (
+          <div className="bg-[var(--bg-card)] rounded-2xl p-12 border border-[var(--border-color)] text-center">
+            <div className="w-16 h-16 rounded-2xl bg-forest/10 flex items-center justify-center mx-auto mb-4">
+              <Gift className="w-8 h-8 text-forest" />
+            </div>
+            <h4 className="text-lg font-semibold text-[var(--text-primary)] mb-1">No donations yet</h4>
+            <p className="text-sm text-[var(--text-muted)] mb-4">Be the first to share a meal in your community!</p>
+            <button onClick={() => setShowForm(true)} className="px-5 py-2.5 bg-forest text-white rounded-xl text-sm font-semibold hover:bg-forest-dark transition-colors">
+              List Your First Donation
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {myDonations.map(d => (
+              <DonationCard key={d.id} donation={d} isDonor onDelete={() => deleteDonation(d.id)} />
+            ))}
           </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }
 
-// ==================== STATUS BADGE ====================
-function StatusBadge({ status }: { status: string }) {
-  const config: Record<string, { bg: string; text: string; dot: string }> = {
-    'available': { bg: 'bg-green-50 dark:bg-green-900/20', text: 'text-green-700 dark:text-green-300', dot: 'bg-green-500' },
-    'claimed': { bg: 'bg-blue-50 dark:bg-blue-900/20', text: 'text-blue-700 dark:text-blue-300', dot: 'bg-blue-500' },
-    'picked-up': { bg: 'bg-purple-50 dark:bg-purple-900/20', text: 'text-purple-700 dark:text-purple-300', dot: 'bg-purple-500' },
-    'expired': { bg: 'bg-red-50 dark:bg-red-900/20', text: 'text-red-700 dark:text-red-300', dot: 'bg-red-500' },
+function DonationCard({ donation, isDonor, onClaim, onDelete }: { donation: FoodDonation; isDonor?: boolean; onClaim?: () => void; onDelete?: () => void }) {
+  const { user } = useApp();
+  const isExpired = new Date(donation.bestBefore) < new Date();
+  const status = isExpired ? 'expired' : donation.status;
+
+  const statusConfig: Record<string, { label: string; color: string; bg: string }> = {
+    available: { label: 'Available', color: 'text-green-700 dark:text-green-300', bg: 'bg-green-50 dark:bg-green-900/20' },
+    claimed: { label: 'Claimed', color: 'text-blue-700 dark:text-blue-300', bg: 'bg-blue-50 dark:bg-blue-900/20' },
+    expired: { label: 'Expired', color: 'text-red-700 dark:text-red-300', bg: 'bg-red-50 dark:bg-red-900/20' },
   };
-  const c = config[status] || config['available'];
+  const s = statusConfig[status];
+
+  const timeLeft = !isExpired ? getTimeLeft(donation.bestBefore) : null;
+
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${c.bg} ${c.text}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
-      {status.charAt(0).toUpperCase() + status.slice(1).replace('-', ' ')}
-    </span>
+    <div className="bg-[var(--bg-card)] rounded-2xl p-5 border border-[var(--border-color)] hover:shadow-lg hover:shadow-[var(--shadow-color)] transition-all duration-300">
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex items-start gap-3">
+          <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${donation.isVeg ? 'bg-green-100 dark:bg-green-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
+            <Utensils className={`w-5 h-5 ${donation.isVeg ? 'text-green-600' : 'text-red-600'}`} />
+          </div>
+          <div>
+            <h4 className="font-semibold text-[var(--text-primary)]">{donation.foodType}</h4>
+            <p className="text-xs text-[var(--text-muted)] flex items-center gap-1 mt-0.5">
+              <MapPin className="w-3 h-3" /> {donation.donorLocality}
+            </p>
+          </div>
+        </div>
+        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${s.bg} ${s.color}`}>
+          {s.label}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
+        <div className="flex items-center gap-2 text-[var(--text-secondary)]">
+          <Weight className="w-4 h-4 text-[var(--text-muted)]" />
+          <span>{donation.quantity}</span>
+        </div>
+        <div className="flex items-center gap-2 text-[var(--text-secondary)]">
+          <Users className="w-4 h-4 text-[var(--text-muted)]" />
+          <span>Serves {donation.serves}</span>
+        </div>
+        <div className="flex items-center gap-2 text-[var(--text-secondary)]">
+          <Calendar className="w-4 h-4 text-[var(--text-muted)]" />
+          <span className="truncate">Prepared {new Date(donation.preparedOn).toLocaleDateString()}</span>
+        </div>
+        <div className="flex items-center gap-2 text-[var(--text-secondary)]">
+          <Package className="w-4 h-4 text-[var(--text-muted)]" />
+          <span className="truncate">{donation.packaging}</span>
+        </div>
+      </div>
+
+      {timeLeft && status === 'available' && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 text-xs mb-3">
+          <Clock className="w-3.5 h-3.5" />
+          <span>Best before in <strong>{timeLeft}</strong></span>
+        </div>
+      )}
+
+      {donation.notes && (
+        <p className="text-xs text-[var(--text-muted)] mb-3 italic">"{donation.notes}"</p>
+      )}
+
+      <div className="flex items-center justify-between pt-3 border-t border-[var(--border-color)]">
+        <div className="text-xs text-[var(--text-muted)]">
+          <p className="font-medium text-[var(--text-secondary)]">{donation.donorName}</p>
+          {isDonor ? (
+            <p>📞 {donation.donorPhone}</p>
+          ) : (
+            <p>📞 {donation.donorPhone} • {donation.pickupMethod}</p>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {isDonor && onDelete && status === 'available' && (
+            <button onClick={onDelete} className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-[var(--text-muted)] hover:text-red-500 transition-colors" aria-label="Delete">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+          {!isDonor && onClaim && status === 'available' && (
+            <button onClick={onClaim} className="px-4 py-2 bg-forest text-white rounded-xl text-sm font-semibold hover:bg-forest-dark transition-colors flex items-center gap-1.5">
+              <Heart className="w-3.5 h-3.5" /> Claim
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
-// ==================== MAIN APP ====================
+function getTimeLeft(dateStr: string): string {
+  const diff = new Date(dateStr).getTime() - Date.now();
+  if (diff <= 0) return 'expired';
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  if (hours < 1) return `${Math.floor(diff / (1000 * 60))} min`;
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''}`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days > 1 ? 's' : ''}`;
+}
+
+// ============ ACCEPTOR DASHBOARD ============
+function AcceptorDashboard() {
+  const { user, donations, claimDonation, showToast } = useApp();
+  const [search, setSearch] = useState('');
+  const [filterVeg, setFilterVeg] = useState<'all' | 'veg' | 'nonveg'>('all');
+
+  const availableInLocality = useMemo(() => {
+    return donations.filter(d => {
+      if (d.status !== 'available') return false;
+      if (new Date(d.bestBefore) < new Date()) return false;
+      const matchLocality = d.donorLocality.toLowerCase() === user?.locality.toLowerCase();
+      const matchSearch = !search || d.foodType.toLowerCase().includes(search.toLowerCase());
+      const matchVeg = filterVeg === 'all' || (filterVeg === 'veg' ? d.isVeg : !d.isVeg);
+      return matchLocality && matchSearch && matchVeg;
+    });
+  }, [donations, user, search, filterVeg]);
+
+  const myClaims = donations.filter(d => d.claimedBy === user?.id);
+
+  const handleClaim = (d: FoodDonation) => {
+    claimDonation(d.id);
+    showToast('success', `You claimed "${d.foodType}". Contact ${d.donorName} at ${d.donorPhone}`);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Hero */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-cream to-cream-dark dark:from-forest/20 dark:to-forest/10 p-6 lg:p-8 border border-cream-dark dark:border-forest/20">
+        <div className="relative z-10 max-w-2xl">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-forest/10 rounded-full text-xs font-medium text-forest mb-3">
+            <MapPin className="w-3 h-3" /> {user?.locality}
+          </div>
+          <h2 className="text-2xl lg:text-3xl font-bold text-[var(--text-primary)] mb-2">Food available near you</h2>
+          <p className="text-[var(--text-secondary)] text-sm lg:text-base">
+            <span className="font-bold text-forest">{availableInLocality.length}</span> donation{availableInLocality.length !== 1 ? 's' : ''} in your locality. Claim one to feed your community.
+          </p>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-[var(--bg-card)] rounded-2xl p-4 border border-[var(--border-color)]">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search food type..."
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-all"
+            />
+          </div>
+          <div className="flex gap-2">
+            {(['all', 'veg', 'nonveg'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilterVeg(f)}
+                className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  filterVeg === f
+                    ? 'bg-forest text-white shadow-md shadow-forest/20'
+                    : 'bg-[var(--bg-primary)] text-[var(--text-secondary)] border border-[var(--border-color)] hover:border-forest/30'
+                }`}
+              >
+                {f === 'all' ? '🍽️ All' : f === 'veg' ? '🟢 Veg' : '🔴 Non-Veg'}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Available donations */}
+      <div>
+        <h3 className="text-lg font-bold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+          <Sparkles className="w-5 h-5 text-forest" /> Available Now
+        </h3>
+        {availableInLocality.length === 0 ? (
+          <div className="bg-[var(--bg-card)] rounded-2xl p-12 border border-[var(--border-color)] text-center">
+            <div className="w-16 h-16 rounded-2xl bg-forest/10 flex items-center justify-center mx-auto mb-4">
+              <Search className="w-8 h-8 text-forest" />
+            </div>
+            <h4 className="text-lg font-semibold text-[var(--text-primary)] mb-1">
+              {search || filterVeg !== 'all' ? 'No matching donations' : 'No food available yet'}
+            </h4>
+            <p className="text-sm text-[var(--text-muted)]">
+              {search || filterVeg !== 'all'
+                ? 'Try adjusting your filters'
+                : "You'll be notified as soon as a donor in your locality lists food"}
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {availableInLocality.map(d => (
+              <DonationCard key={d.id} donation={d} onClaim={() => handleClaim(d)} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* My Claims */}
+      {myClaims.length > 0 && (
+        <div>
+          <h3 className="text-lg font-bold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-forest" /> My Claims
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {myClaims.map(d => (
+              <DonationCard key={d.id} donation={d} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ MAIN APP ============
 export default function App() {
-  const [theme, setTheme] = useState('light');
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
-  const [users, setUsers] = useState<UserAccount[]>(() => {
-    const saved = localStorage.getItem('sharemeal-users');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [donations, setDonations] = useState<FoodDonation[]>(() => {
-    const saved = localStorage.getItem('sharemeal-donations');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [notifications, setNotifications] = useState<Notification[]>(() => {
-    const saved = localStorage.getItem('sharemeal-notifications');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [theme, setTheme] = useState<string>(() => LS.get('ff_theme', 'light'));
+  const [user, setUser] = useState<User | null>(() => LS.get<User | null>('ff_current_user', null));
+  const [donations, setDonations] = useState<FoodDonation[]>(() => LS.get<FoodDonation[]>('ff_donations', []));
+  const [notifications, setNotifications] = useState<Notification[]>(() => LS.get<Notification[]>('ff_notifications', []));
+  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
 
-  // Persist data
-  useEffect(() => { localStorage.setItem('sharemeal-users', JSON.stringify(users)); }, [users]);
-  useEffect(() => { localStorage.setItem('sharemeal-donations', JSON.stringify(donations)); }, [donations]);
-  useEffect(() => { localStorage.setItem('sharemeal-notifications', JSON.stringify(notifications)); }, [notifications]);
-
-  // Apply theme
   useEffect(() => {
     document.documentElement.classList.remove('light', 'dark');
     document.documentElement.classList.add(theme);
     document.documentElement.setAttribute('data-theme', theme);
+    LS.set('ff_theme', theme);
   }, [theme]);
+
+  useEffect(() => { LS.set('ff_donations', donations); }, [donations]);
+  useEffect(() => { LS.set('ff_notifications', notifications); }, [notifications]);
 
   const toggleTheme = () => setTheme(t => t === 'light' ? 'dark' : 'light');
 
-  // When a new user registers, save them
-  const handleSetCurrentUser = useCallback((user: UserAccount | null) => {
-    if (user && !users.find(u => u.id === user.id)) {
-      setUsers(prev => [...prev, user]);
+  const showToast = (type: 'success' | 'error' | 'warning', message: string) => {
+    setToast({ type, message });
+  };
+
+  const addDonation = (d: Omit<FoodDonation, 'id' | 'createdAt' | 'status'>) => {
+    const newDonation: FoodDonation = {
+      ...d,
+      id: uid(),
+      status: 'available',
+      createdAt: new Date().toISOString(),
+    };
+    setDonations(prev => [newDonation, ...prev]);
+
+    // Notify all acceptors in the same locality
+    const users = LS.get<Record<string, User>>('ff_users', {});
+    const acceptorsInLocality = Object.values(users).filter(
+      u => u.role === 'acceptor' && u.locality.toLowerCase() === d.donorLocality.toLowerCase()
+    );
+    const newNotifs: Notification[] = acceptorsInLocality.map(a => ({
+      id: uid(),
+      acceptorId: a.id,
+      donationId: newDonation.id,
+      title: '🍽️ New food available!',
+      message: `${d.donorName} donated ${d.quantity} of ${d.foodType} in ${d.donorLocality}. Serves ${d.serves} people.`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    }));
+    if (newNotifs.length > 0) {
+      setNotifications(prev => [...prev, ...newNotifs]);
     }
-    setCurrentUser(user);
-  }, [users]);
+  };
 
-  const addDonation = useCallback((d: Omit<FoodDonation, 'id' | 'createdAt' | 'status'>) => {
-    const donation: FoodDonation = { ...d, id: genId(), createdAt: new Date().toISOString(), status: 'available' };
-    setDonations(prev => [donation, ...prev]);
-  }, []);
+  const claimDonation = (id: string) => {
+    if (!user) return;
+    setDonations(prev => prev.map(d => d.id === id ? { ...d, status: 'claimed' as const, claimedBy: user.id } : d));
+  };
 
-  const claimDonation = useCallback((donationId: string) => {
-    if (!currentUser) return;
-    setDonations(prev => prev.map(d =>
-      d.id === donationId ? { ...d, status: 'claimed' as const, claimedBy: currentUser.id, claimedByName: currentUser.name } : d
-    ));
-  }, [currentUser]);
+  const deleteDonation = (id: string) => {
+    setDonations(prev => prev.filter(d => d.id !== id));
+    showToast('success', 'Donation removed');
+  };
 
-  const addNotification = useCallback((n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
-    const notification: Notification = { ...n, id: genId(), createdAt: new Date().toISOString(), read: false };
-    setNotifications(prev => [notification, ...prev]);
-  }, []);
+  const markNotificationRead = (id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  };
 
-  const contextValue: AppContextType = {
-    theme, toggleTheme,
-    currentUser, setCurrentUser: handleSetCurrentUser,
-    donations, setDonations,
-    notifications, setNotifications,
-    users,
-    addDonation, claimDonation, addNotification,
+  const clearNotifications = () => {
+    if (!user) return;
+    setNotifications(prev => prev.filter(n => n.acceptorId !== user.id));
+  };
+
+  const ctx: AppContextType = {
+    theme, toggleTheme, user, setUser,
+    donations, addDonation, claimDonation, deleteDonation,
+    notifications, markNotificationRead, clearNotifications,
+    showToast,
   };
 
   return (
-    <AppContext.Provider value={contextValue}>
-      <div className="min-h-screen bg-[var(--bg-primary)] transition-theme">
-        {/* Theme Toggle - Floating */}
-        {!currentUser && (
-          <button
-            onClick={toggleTheme}
-            className="fixed top-4 right-4 z-50 p-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm hover:shadow-md transition-all"
-            aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-          >
-            {theme === 'light' ? <Moon className="w-5 h-5 text-[var(--text-secondary)]" /> : <Sun className="w-5 h-5 text-[var(--text-secondary)]" />}
-          </button>
-        )}
+    <AppContext.Provider value={ctx}>
+      <style>{`
+        .form-input {
+          width: 100%;
+          padding: 0.625rem 0.875rem;
+          border-radius: 0.75rem;
+          background: var(--bg-primary);
+          border: 1px solid var(--border-color);
+          color: var(--text-primary);
+          font-size: 0.875rem;
+          transition: all 0.2s;
+        }
+        .form-input:focus {
+          outline: none;
+          border-color: #176B45;
+          box-shadow: 0 0 0 3px rgba(23, 107, 69, 0.15);
+        }
+        .form-input::placeholder { color: var(--text-muted); }
+        @keyframes slide-in {
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        .animate-slide-in { animation: slide-in 0.3s ease-out; }
+        * { box-sizing: border-box; }
+        body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+        *:focus-visible { outline: 2px solid #176B45; outline-offset: 2px; border-radius: 4px; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 3px; }
+      `}</style>
 
-        {/* Route */}
-        {!currentUser ? (
-          <LoginPage />
-        ) : currentUser.role === 'donor' ? (
-          <DonorDashboard />
-        ) : (
-          <AcceptorDashboard />
-        )}
-      </div>
+      {toast && <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} />}
+
+      {!user ? (
+        <AuthPage />
+      ) : (
+        <div className="min-h-screen bg-[var(--bg-primary)] transition-theme">
+          <Header />
+          <main className="max-w-7xl mx-auto p-4 lg:p-6">
+            {user.role === 'donor' ? <DonorDashboard /> : <AcceptorDashboard />}
+          </main>
+        </div>
+      )}
     </AppContext.Provider>
   );
 }

@@ -1,36 +1,6 @@
 @import "tailwindcss";
 
-@theme {
-  --color-forest: #176B45;
-  --color-forest-light: #2E8B57;
-  --color-forest-dark: #0F4D32;
-  --color-cream: #FFF8E7;
-  --color-cream-dark: #F5EDD6;
-  --color-charcoal: #2D3436;
-  --color-charcoal-light: #636E72;
-  --color-bg: #F7FAF7;
-  --color-bg-dark: #1a2320;
-  --color-card: #FFFFFF;
-  --color-card-dark: #232D28;
-  --color-border: #E2E8E4;
-  --color-border-dark: #3A4A42;
-  --color-danger: #DC3545;
-  --color-warning: #F0AD4E;
-  --color-success: #28A745;
-}
-
-/* Base styles */
-* {
-  box-sizing: border-box;
-}
-
-body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-/* Light theme */
+/* Base theme colors as CSS variables */
 html.light {
   --bg-primary: #F7FAF7;
   --bg-card: #FFFFFF;
@@ -43,7 +13,6 @@ html.light {
   --hover-bg: #F0F7F2;
 }
 
-/* Dark theme */
 html.dark {
   --bg-primary: #1a2320;
   --bg-card: #232D28;
@@ -56,63 +25,16 @@ html.dark {
   --hover-bg: #2A3A33;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+* {
+  box-sizing: border-box;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-::-webkit-scrollbar-thumb {
-  background: var(--text-muted);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-}
-
-/* Skeleton animation */
-@keyframes skeleton-pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.8; }
-}
-
-.skeleton {
-  animation: skeleton-pulse 1.5s ease-in-out infinite;
-  background: linear-gradient(90deg, var(--border-color) 25%, var(--hover-bg) 50%, var(--border-color) 75%);
-  background-size: 200% 100%;
-  animation: skeleton-pulse 1.5s ease-in-out infinite, skeleton-shimmer 1.5s ease-in-out infinite;
-}
-
-@keyframes skeleton-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* Focus styles for accessibility */
-*:focus-visible {
-  outline: 2px solid #176B45;
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
-/* Transition utilities */
 .transition-theme {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-/* Toast slide-in animation */
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateX(100%);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
 }
